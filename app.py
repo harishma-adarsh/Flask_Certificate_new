@@ -1,4 +1,3 @@
-
 # import os
 # import sqlite3
 # import pandas as pd
@@ -35,6 +34,9 @@
 
 # # ---------------- CERTIFICATE NUMBER ----------------
 # def get_next_certificate_number():
+#     START_NUMBER = 1      # numeric value
+#     PAD_LENGTH = 3        # number of digits → 001
+
 #     conn = sqlite3.connect(DB_PATH)
 #     c = conn.cursor()
 #     c.execute("SELECT certificate_number FROM certificates ORDER BY id DESC LIMIT 1")
@@ -42,36 +44,30 @@
 #     conn.close()
 
 #     if not row:
-#         return "ACDT-C-25-001"
+#         return f"ACDT-C-25-{START_NUMBER:0{PAD_LENGTH}d}"
 
 #     match = re.search(r"(\d+)$", row[0])
-#     next_no = 1 if not match else int(match.group(1)) + 1
-#     return f"ACDT-C-25-{next_no:03d}"
+#     last_no = int(match.group(1)) if match else START_NUMBER - 1
+#     next_no = last_no + 1
+
+#     return f"ACDT-C-25-{next_no:0{PAD_LENGTH}d}"
 
 
-# # ---------------- SEMESTER FORMATTER ----------------
+
+
+# # ---------------- SEMESTER FORMAT ----------------
 # def format_semester(semester):
-#     """
-#     Handles:
-#     3      → 3<sup>rd</sup>
-#     3rd    → 3<sup>rd</sup>
-#     2nd    → 2<sup>nd</sup>
-#     11th   → 11<sup>th</sup>
-#     """
-
 #     if not semester:
 #         return ""
 
 #     semester = str(semester).strip()
 
-#     # Case 1: already like "3rd", "2nd", "4th"
+#     # Handles 3rd, 2nd, 4th
 #     match = re.match(r"^(\d+)(st|nd|rd|th)$", semester, re.IGNORECASE)
 #     if match:
-#         number = match.group(1)
-#         suffix = match.group(2)
-#         return f"{number}<sup>{suffix}</sup>"
+#         return f"{match.group(1)}<sup>{match.group(2)}</sup>"
 
-#     # Case 2: only number like "3"
+#     # Handles only numbers
 #     if semester.isdigit():
 #         sem = int(semester)
 #         if 11 <= sem % 100 <= 13:
@@ -80,9 +76,33 @@
 #             suffix = {1: "st", 2: "nd", 3: "rd"}.get(sem % 10, "th")
 #         return f"{sem}<sup>{suffix}</sup>"
 
-#     # Fallback
 #     return semester
 
+
+# # ---------------- INTERNSHIP DURATION ----------------
+# def format_internship_duration(row):
+#     """
+#     Priority:
+#     1. internship_hours
+#     2. start_date + end_date
+#     """
+
+#     hours = row.get("internship_hours", "")
+#     if pd.notna(hours) and str(hours).strip() != "":
+#         return f"{int(hours)} Hours"
+
+#     start = row.get("start_date", "")
+#     end = row.get("end_date", "")
+
+#     if pd.notna(start) and pd.notna(end):
+#         try:
+#             start_fmt = pd.to_datetime(start).strftime("%d-%m-%Y")
+#             end_fmt = pd.to_datetime(end).strftime("%d-%m-%Y")
+#             return f"from {start_fmt} to {end_fmt}"
+#         except:
+#             pass
+
+#     return ""
 
 
 # # ---------------- ROUTE ----------------
@@ -110,8 +130,10 @@
 #                 .str.replace(r"\s+", "_", regex=True)
 #             )
 
-#             if "issue_date" in df.columns:
-#                 df["issue_date"] = pd.to_datetime(df["issue_date"], dayfirst=True)
+#             # Parse dates safely
+#             for col in ["issue_date", "start_date", "end_date"]:
+#                 if col in df.columns:
+#                     df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
 
 #             pdf_files = []
 
@@ -123,8 +145,6 @@
 #                 if "issue_date" in row and not pd.isna(row["issue_date"]):
 #                     issue_date = row["issue_date"].strftime("%d-%m-%Y")
 
-#                 # semester_num, semester_suffix = split_semester(row.get("semester", ""))
-
 #                 template = Template(custom_content)
 #                 rendered_body = template.render(
 #                     college_name=row.get("college_name", ""),
@@ -132,10 +152,9 @@
 #                     semester=format_semester(row.get("semester", "")),
 #                     course_name=row.get("course_name", ""),
 #                     reg_id=row.get("reg_id", ""),
-#                     internship_hours=row.get("internship_hours", ""),
+#                     internship_duration=format_internship_duration(row),
 #                     internship_program=row.get("internship_program", "")
-# )
-
+#                 )
 
 #                 context = {
 #                     "student_name": row.get("student_name", ""),
@@ -216,9 +235,8 @@
 
 # # ---------------- MAIN ----------------
 # if __name__ == "__main__":
-#     init_db()
-#     app.run(debug=True)
-
+#     port = int(os.environ.get("PORT", 10000))
+#     app.run(host="0.0.0.0", port=port)
 import os
 import sqlite3
 import pandas as pd
@@ -253,8 +271,23 @@ def init_db():
     conn.close()
 
 
+# ---------------- SAFE VALUE (NaN FIX) ----------------
+def safe_value(value):
+    """
+    Converts NaN / None to empty string
+    """
+    if value is None:
+        return ""
+    if isinstance(value, float) and pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
 # ---------------- CERTIFICATE NUMBER ----------------
 def get_next_certificate_number():
+    START_NUMBER = 1   # 001
+    PAD_LENGTH = 3     # 3 digits
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT certificate_number FROM certificates ORDER BY id DESC LIMIT 1")
@@ -262,26 +295,26 @@ def get_next_certificate_number():
     conn.close()
 
     if not row:
-        return "ACDT-C-25-001"
+        return f"ACDT-C-25-{START_NUMBER:0{PAD_LENGTH}d}"
 
     match = re.search(r"(\d+)$", row[0])
-    next_no = 1 if not match else int(match.group(1)) + 1
-    return f"ACDT-C-25-{next_no:03d}"
+    last_no = int(match.group(1)) if match else START_NUMBER - 1
+    next_no = last_no + 1
+
+    return f"ACDT-C-25-{next_no:0{PAD_LENGTH}d}"
 
 
 # ---------------- SEMESTER FORMAT ----------------
 def format_semester(semester):
-    if not semester:
+    if semester is None or pd.isna(semester):
         return ""
 
     semester = str(semester).strip()
 
-    # Handles 3rd, 2nd, 4th
     match = re.match(r"^(\d+)(st|nd|rd|th)$", semester, re.IGNORECASE)
     if match:
         return f"{match.group(1)}<sup>{match.group(2)}</sup>"
 
-    # Handles only numbers
     if semester.isdigit():
         sem = int(semester)
         if 11 <= sem % 100 <= 13:
@@ -295,20 +328,14 @@ def format_semester(semester):
 
 # ---------------- INTERNSHIP DURATION ----------------
 def format_internship_duration(row):
-    """
-    Priority:
-    1. internship_hours
-    2. start_date + end_date
-    """
-
-    hours = row.get("internship_hours", "")
-    if pd.notna(hours) and str(hours).strip() != "":
+    hours = row.get("internship_hours")
+    if not pd.isna(hours) and str(hours).strip():
         return f"{int(hours)} Hours"
 
-    start = row.get("start_date", "")
-    end = row.get("end_date", "")
+    start = row.get("start_date")
+    end = row.get("end_date")
 
-    if pd.notna(start) and pd.notna(end):
+    if not pd.isna(start) and not pd.isna(end):
         try:
             start_fmt = pd.to_datetime(start).strftime("%d-%m-%Y")
             end_fmt = pd.to_datetime(end).strftime("%d-%m-%Y")
@@ -319,19 +346,35 @@ def format_internship_duration(row):
     return ""
 
 
+# ---------------- GET TEMPLATES ----------------
+def get_certificate_templates():
+    """
+    Returns a list of available certificate HTML templates.
+    Scans the 'templates' directory for files starting with 'certificate' and ending with '.html'.
+    """
+    templates_dir = os.path.join(BASE_DIR, "templates")
+    files = [f for f in os.listdir(templates_dir) if f.startswith("certificate") and f.endswith(".html")]
+    return sorted(files)
+
+
 # ---------------- ROUTE ----------------
 @app.route("/", methods=["GET", "POST"])
 def upload():
+
+    available_templates = get_certificate_templates()
 
     if request.method == "POST":
 
         excel_file = request.files.get("excel")
         custom_content = request.form.get("content", "").strip()
         single_name = request.form.get("student_name", "").strip()
+        selected_template = request.form.get("template_name", "certificate.html")
 
-        # ======================================================
-        # BULK MODE
-        # ======================================================
+        # Validate selected template
+        if selected_template not in available_templates:
+            selected_template = "certificate.html"
+
+        # ===================== BULK MODE =====================
         if excel_file and excel_file.filename:
 
             df = pd.read_excel(excel_file)
@@ -344,7 +387,7 @@ def upload():
                 .str.replace(r"\s+", "_", regex=True)
             )
 
-            # Parse dates safely
+            # Parse date columns safely
             for col in ["issue_date", "start_date", "end_date"]:
                 if col in df.columns:
                     df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
@@ -361,25 +404,25 @@ def upload():
 
                 template = Template(custom_content)
                 rendered_body = template.render(
-                    college_name=row.get("college_name", ""),
-                    college_location=row.get("college_location", ""),
-                    semester=format_semester(row.get("semester", "")),
-                    course_name=row.get("course_name", ""),
-                    reg_id=row.get("reg_id", ""),
+                    college_name=safe_value(row.get("college_name")),
+                    college_location=safe_value(row.get("college_location")),
+                    semester=format_semester(row.get("semester")),
+                    course_name=safe_value(row.get("course_name")),
+                    reg_id=safe_value(row.get("reg_id")),
                     internship_duration=format_internship_duration(row),
-                    internship_program=row.get("internship_program", "")
+                    internship_program=safe_value(row.get("internship_program"))
                 )
 
                 context = {
-                    "student_name": row.get("student_name", ""),
+                    "student_name": safe_value(row.get("student_name")),
                     "certificate_body": rendered_body,
                     "certificate_number": cert_no,
-                    "place": row.get("place", ""),
+                    "place": safe_value(row.get("place")),
                     "issue_date": issue_date,
                     "base_url": f"file:///{BASE_DIR.replace(os.sep, '/')}"
                 }
 
-                html = render_template("certificate.html", **context)
+                html = render_template(selected_template, **context)
 
                 os.makedirs(PDF_DIR, exist_ok=True)
                 pdf_path = os.path.join(PDF_DIR, f"{cert_no}.pdf")
@@ -392,7 +435,7 @@ def upload():
                 c = conn.cursor()
                 c.execute(
                     "INSERT INTO certificates (certificate_number, student_name, pdf_path) VALUES (?, ?, ?)",
-                    (cert_no, row.get("student_name", ""), pdf_path)
+                    (cert_no, context["student_name"], pdf_path)
                 )
                 conn.commit()
                 conn.close()
@@ -408,9 +451,7 @@ def upload():
 
             return send_file(zip_path, as_attachment=True, download_name="certificates.zip")
 
-        # ======================================================
-        # SINGLE MODE
-        # ======================================================
+        # ===================== SINGLE MODE =====================
         elif single_name and custom_content:
 
             raw_date = request.form.get("single_date", "")
@@ -426,15 +467,15 @@ def upload():
             rendered_body = template.render()
 
             context = {
-                "student_name": single_name,
+                "student_name": safe_value(single_name),
                 "certificate_body": rendered_body,
                 "certificate_number": cert_no,
-                "single_place": single_place,
+                "single_place": safe_value(single_place),
                 "single_issue_date": single_date,
                 "base_url": f"file:///{BASE_DIR.replace(os.sep, '/')}"
             }
 
-            html = render_template("certificate.html", **context)
+            html = render_template(selected_template, **context)
 
             os.makedirs(PDF_DIR, exist_ok=True)
             pdf_path = os.path.join(PDF_DIR, f"{cert_no}.pdf")
@@ -444,10 +485,15 @@ def upload():
 
         return "Error: Upload Excel or enter Student Name"
 
-    return render_template("upload.html")
+    return render_template("upload.html", templates=available_templates)
 
+
+# ---------------- INITIALIZE ----------------
+with app.app_context():
+    init_db()
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+

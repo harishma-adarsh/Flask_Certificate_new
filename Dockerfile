@@ -8,15 +8,23 @@ RUN apt-get update && apt-get install -y \
     python3-cffi \
     python3-brotli \
     libpango-1.0-0 \
-    libharfbuzz0b \
     libpangoft2-1.0-0 \
-    libpangocairo-1.0-0 \
-    libcairo2 \
+    libharfbuzz0b \
+    libharfbuzz-subset0 \
+    libjpeg-dev \
+    libopenjp2-7-dev \
     libffi-dev \
-    libgdk-pixbuf2.0-0 \
+    libgdk-pixbuf-2.0-0 \
     libglib2.0-0 \
+    libcairo2 \
+    libpangocairo-1.0-0 \
     shared-mime-info \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
+
+
+
+
 
 # Set the working directory in the container
 WORKDIR /app

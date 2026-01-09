@@ -357,6 +357,32 @@ def get_certificate_templates():
     return sorted(files)
 
 
+@app.route("/reset_db", methods=["POST"])
+def reset_db():
+    try:
+        # Clear database
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("DELETE FROM certificates")
+        c.execute("DELETE FROM sqlite_sequence WHERE name='certificates'")
+        conn.commit()
+        conn.close()
+
+        # Clear generated PDFs
+        if os.path.exists(PDF_DIR):
+            for f in os.listdir(PDF_DIR):
+                file_path = os.path.join(PDF_DIR, f)
+                try:
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+                except Exception as e:
+                    print(f"Error deleting file {file_path}: {e}")
+
+        return "Database and generated files have been reset successfully!"
+    except Exception as e:
+        return f"Error resetting database: {str(e)}"
+
+
 # ---------------- ROUTE ----------------
 @app.route("/", methods=["GET", "POST"])
 def upload():
@@ -456,12 +482,13 @@ def upload():
 
             raw_date = request.form.get("single_date", "")
             single_place = request.form.get("single_place", "")
+            custom_cert_no = request.form.get("certificate_number", "").strip()
 
             single_date = ""
             if raw_date:
                 single_date = datetime.strptime(raw_date, "%Y-%m-%d").strftime("%d-%m-%Y")
 
-            cert_no = get_next_certificate_number()
+            cert_no = custom_cert_no if custom_cert_no else get_next_certificate_number()
 
             template = Template(custom_content)
             rendered_body = template.render()
@@ -481,6 +508,20 @@ def upload():
             pdf_path = os.path.join(PDF_DIR, f"{cert_no}.pdf")
 
             HTML(string=html, base_url=BASE_DIR).write_pdf(pdf_path)
+
+            # Save DB record
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute(
+                    "INSERT INTO certificates (certificate_number, student_name, pdf_path) VALUES (?, ?, ?)",
+                    (cert_no, context["student_name"], pdf_path)
+                )
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                print(f"Error saving to DB: {e}")
+
             return send_file(pdf_path, as_attachment=True)
 
         return "Error: Upload Excel or enter Student Name"

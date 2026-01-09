@@ -259,13 +259,18 @@
                 </div>
 
                 <div class="row g-3 mb-4">
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <label class="form-label">Issue Date</label>
                         <input type="date" name="single_date" class="form-control">
                     </div>
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <label class="form-label">Place</label>
                         <input type="text" name="single_place" class="form-control" placeholder="E.g. Calicut">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Cert. No. (Optional)</label>
+                        <input type="text" name="certificate_number" class="form-control"
+                            placeholder="E.g. ACDT-C-25-001">
                     </div>
                 </div>
 
@@ -305,11 +310,18 @@ We wish them all the best for their future endeavors.
                         {% raw %}
                         {{ student_name }}, {{ internship_program }}, {{ start_date }}, {{ end_date }}, {{ place }}, {{
                         college_name }}, {{ college_location }}, {{ semester }}, {{ course_name }}, {{ reg_id }}, {{
-                        internship_hours }}
+                        internship_hours }}, {{ certificate_number }}
                         {% endraw %}
                     </div>
                 </div>
             </form>
+        </div>
+
+        <div class="card-footer bg-light border-top p-4 d-flex justify-content-between align-items-center">
+            <p class="mb-0 text-muted small"><i class="fas fa-shield-alt me-1"></i> Admin Panel</p>
+            <button type="button" class="btn btn-outline-danger btn-sm" onclick="confirmReset()">
+                <i class="fas fa-trash-alt me-1"></i> Reset Database
+            </button>
         </div>
     </div>
 
@@ -330,6 +342,22 @@ We wish them all the best for their future endeavors.
             // Restore functionality / Focus
             textarea.focus();
             textarea.setSelectionRange(start + replacement.length, start + replacement.length);
+        }
+        function confirmReset() {
+            if (confirm("Are you sure you want to reset the database? This will delete all certificate records and generated PDF files. This action cannot be undone.")) {
+                fetch('/reset_db', {
+                    method: 'POST',
+                })
+                    .then(response => response.text())
+                    .then(data => {
+                        alert(data);
+                        location.reload();
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        alert("An error occurred while resetting the database.");
+                    });
+            }
         }
     </script>
 </body>

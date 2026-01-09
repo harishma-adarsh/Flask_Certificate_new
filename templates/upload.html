@@ -228,7 +228,13 @@
         </div>
 
         <div class="card-body">
-            <form method="post" enctype="multipart/form-data">
+            <form id="certForm" method="post" enctype="multipart/form-data" onsubmit="setTimeout(() => { 
+                document.getElementsByName('student_name')[0].value = '';
+                document.getElementsByName('single_date')[0].value = '';
+                document.getElementsByName('single_place')[0].value = '';
+                document.getElementsByName('certificate_number')[0].value = '';
+                document.getElementsByName('excel')[0].value = '';
+            }, 100);">
 
                 <!-- Section 1: Template & Upload -->
                 <div class="row g-4">

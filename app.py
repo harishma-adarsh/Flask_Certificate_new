@@ -7,8 +7,20 @@ from datetime import datetime
 from flask import Flask, render_template, request, send_file, jsonify
 from weasyprint import HTML
 from jinja2 import Template
+import cloudinary
+import cloudinary.uploader
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
+
+# ---------------- CLOUDINARY CONFIG ----------------
+cloudinary.config(
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET")
+)
 
 # ---------------- PATHS ----------------
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -25,9 +37,17 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             certificate_number TEXT,
             student_name TEXT,
-            pdf_path TEXT
+            pdf_path TEXT,
+            cloudinary_url TEXT
         )
     """)
+    
+    # Migration: Add cloudinary_url if not exists
+    c.execute("PRAGMA table_info(certificates)")
+    columns = [info[1] for info in c.fetchall()]
+    if "cloudinary_url" not in columns:
+        c.execute("ALTER TABLE certificates ADD COLUMN cloudinary_url TEXT")
+        
     conn.commit()
     conn.close()
 
@@ -105,6 +125,16 @@ def format_internship_duration(row):
             pass
 
     return ""
+
+
+# ---------------- CLOUDINARY UPLOAD ----------------
+def upload_to_cloudinary(file_path, public_id):
+    try:
+        response = cloudinary.uploader.upload(file_path, public_id=public_id, resource_type="auto")
+        return response.get("secure_url")
+    except Exception as e:
+        print(f"Cloudinary upload failed: {e}")
+        return None
 
 
 # ---------------- SMART HEADER DETECTION ----------------
@@ -266,12 +296,15 @@ def upload():
                 HTML(string=html, base_url=BASE_DIR).write_pdf(pdf_path)
                 pdf_files.append(pdf_path)
 
+                # Upload to Cloudinary
+                cloudinary_url = upload_to_cloudinary(pdf_path, cert_no)
+
                 # Save DB record
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
                 c.execute(
-                    "INSERT INTO certificates (certificate_number, student_name, pdf_path) VALUES (?, ?, ?)",
-                    (cert_no, context["student_name"], pdf_path)
+                    "INSERT INTO certificates (certificate_number, student_name, pdf_path, cloudinary_url) VALUES (?, ?, ?, ?)",
+                    (cert_no, context["student_name"], pdf_path, cloudinary_url)
                 )
                 conn.commit()
                 conn.close()
@@ -319,6 +352,20 @@ def upload():
             pdf_path = os.path.join(PDF_DIR, f"{cert_no}.pdf")
 
             HTML(string=html, base_url=BASE_DIR).write_pdf(pdf_path)
+            
+            # Upload to Cloudinary
+            cloudinary_url = upload_to_cloudinary(pdf_path, cert_no)
+            
+            # Save DB record
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute(
+                "INSERT INTO certificates (certificate_number, student_name, pdf_path, cloudinary_url) VALUES (?, ?, ?, ?)",
+                (cert_no, context["student_name"], pdf_path, cloudinary_url)
+            )
+            conn.commit()
+            conn.close()
+
             return send_file(pdf_path, as_attachment=True)
 
         return "Error: Upload Excel or enter Student Name"

@@ -9,17 +9,29 @@ from weasyprint import HTML
 from jinja2 import Template
 import cloudinary
 import cloudinary.uploader
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# ---------------- LOGGING CONFIG ----------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
 
 # ---------------- CLOUDINARY CONFIG ----------------
+cloudinary_cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME")
+cloudinary_api_key = os.getenv("CLOUDINARY_API_KEY")
+cloudinary_api_secret = os.getenv("CLOUDINARY_API_SECRET")
+
+if not all([cloudinary_cloud_name, cloudinary_api_key, cloudinary_api_secret]):
+    logger.warning("Cloudinary environment variables are missing!")
+
 cloudinary.config(
-    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
-    api_key=os.getenv("CLOUDINARY_API_KEY"),
-    api_secret=os.getenv("CLOUDINARY_API_SECRET")
+    cloud_name=cloudinary_cloud_name,
+    api_key=cloudinary_api_key,
+    api_secret=cloudinary_api_secret
 )
 
 # ---------------- PATHS ----------------
@@ -130,10 +142,13 @@ def format_internship_duration(row):
 # ---------------- CLOUDINARY UPLOAD ----------------
 def upload_to_cloudinary(file_path, public_id):
     try:
+        logger.info(f"Uploading {file_path} to Cloudinary...")
         response = cloudinary.uploader.upload(file_path, public_id=public_id, resource_type="auto")
-        return response.get("secure_url")
+        url = response.get("secure_url")
+        logger.info(f"Upload successful: {url}")
+        return url
     except Exception as e:
-        print(f"Cloudinary upload failed: {e}")
+        logger.error(f"Cloudinary upload failed: {e}", exc_info=True)
         return None
 
 
@@ -186,12 +201,12 @@ def preview_columns():
         
         # Normalize column names
         original_columns = df.columns.tolist()
-        normalized_columns = (
-            df.columns.astype(str)
-            .str.strip()
-            .str.lower()
-            .str.replace(r"\s+", "_", regex=True)
-        ).tolist()
+        normalized_columns = []
+        for col in df.columns:
+            # Handle non-string column names
+            col_str = str(col).strip().lower()
+            norm_col = re.sub(r"\s+", "_", col_str)
+            normalized_columns.append(norm_col)
         
         # Create mapping of original to normalized
         column_mapping = [
@@ -309,7 +324,6 @@ def upload():
                 conn.commit()
                 conn.close()
 
-            # ZIP download
             zip_path = os.path.join(PDF_DIR, "certificates.zip")
             if os.path.exists(zip_path):
                 os.remove(zip_path)
@@ -319,6 +333,10 @@ def upload():
                     zipf.write(pdf, os.path.basename(pdf))
 
             return send_file(zip_path, as_attachment=True, download_name="certificates.zip")
+
+        except Exception as e:
+            logger.error(f"Bulk generation error: {e}", exc_info=True)
+            return jsonify({"error": f"An error occurred during bulk generation: {str(e)}"}), 500
 
         # ===================== SINGLE MODE =====================
         elif single_name and custom_content:
@@ -367,6 +385,10 @@ def upload():
             conn.close()
 
             return send_file(pdf_path, as_attachment=True)
+
+        except Exception as e:
+            logger.error(f"Single generation error: {e}", exc_info=True)
+            return jsonify({"error": f"An error occurred during certificate generation: {str(e)}"}), 500
 
         return "Error: Upload Excel or enter Student Name"
 

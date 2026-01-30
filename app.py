@@ -426,6 +426,33 @@ def upload():
     return render_template("upload.html")
 
 
+@app.route("/clear_db", methods=["POST"])
+def clear_db():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("DELETE FROM certificates")
+        # Reset autoincrement
+        c.execute("DELETE FROM sqlite_sequence WHERE name='certificates'")
+        conn.commit()
+        conn.close()
+        
+        # Also clean up local PDFs
+        if os.path.exists(PDF_DIR):
+            for f in os.listdir(PDF_DIR):
+                file_path = os.path.join(PDF_DIR, f)
+                try:
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+                except Exception as e:
+                    logger.error(f"Error deleting file {file_path}: {e}")
+
+        return jsonify({"success": True, "message": "Database cleared successfully!"})
+    except Exception as e:
+        logger.error(f"Clear DB error: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))

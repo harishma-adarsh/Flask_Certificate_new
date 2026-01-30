@@ -186,11 +186,11 @@ def preview_columns():
     """
     Returns the column names from uploaded Excel file as JSON
     """
-    excel_file = request.files.get("excel")
-    if not excel_file or not excel_file.filename:
-        return jsonify({"error": "No file uploaded"}), 400
-    
     try:
+        excel_file = request.files.get("excel")
+        if not excel_file or not excel_file.filename:
+            return jsonify({"error": "No file uploaded"}), 400
+        
         # Smart detect header row
         header_row_idx = detect_header_row(excel_file)
         
@@ -220,6 +220,7 @@ def preview_columns():
             "row_count": len(df)
         })
     except Exception as e:
+        logger.error(f"Preview columns error: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 400
 
 
@@ -235,69 +236,130 @@ def upload():
 
         # ===================== BULK MODE =====================
         if excel_file and excel_file.filename:
+            try:
+                # Smart detect header row
+                header_row_idx = detect_header_row(excel_file)
+                
+                # Reset file pointer after detection read
+                excel_file.seek(0)
 
-            # Smart detect header row
-            header_row_idx = detect_header_row(excel_file)
-            
-            # Reset file pointer after detection read
-            excel_file.seek(0)
+                df = pd.read_excel(excel_file, header=header_row_idx)
 
-            df = pd.read_excel(excel_file, header=header_row_idx)
+                # Normalize column names
+                df.columns = (
+                    df.columns.astype(str)
+                    .str.strip()
+                    .str.lower()
+                    .str.replace(r"\s+", "_", regex=True)
+                )
 
-            # Normalize column names
-            df.columns = (
-                df.columns.astype(str)
-                .str.strip()
-                .str.lower()
-                .str.replace(r"\s+", "_", regex=True)
-            )
+                # Parse date columns safely
+                for col in ["issue_date", "start_date", "end_date"]:
+                    if col in df.columns:
+                        df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
 
-            # Parse date columns safely
-            for col in ["issue_date", "start_date", "end_date"]:
-                if col in df.columns:
-                    df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
+                pdf_files = []
 
-            pdf_files = []
+                for _, row in df.iterrows():
 
-            for _, row in df.iterrows():
+                    cert_no = get_next_certificate_number()
+
+                    issue_date = ""
+                    if "issue_date" in row and not pd.isna(row["issue_date"]):
+                        issue_date = row["issue_date"].strftime("%d-%m-%Y")
+
+                    # Build dynamic context from ALL Excel columns
+                    template_context = {}
+                    for col in df.columns:
+                        value = row.get(col)
+                        
+                        # Special formatting for certain columns
+                        if col == "semester":
+                            template_context[col] = format_semester(value)
+                        elif col == "internship_duration":
+                            template_context[col] = format_internship_duration(row)
+                        elif col in ["start_date", "end_date"] and not pd.isna(value):
+                            template_context[col] = pd.to_datetime(value).strftime("%d-%m-%Y")
+                        elif col == "issue_date":
+                            template_context[col] = issue_date
+                        else:
+                            template_context[col] = safe_value(value)
+                    
+                    # Add computed field for internship_duration if not in Excel
+                    if "internship_duration" not in template_context:
+                        template_context["internship_duration"] = format_internship_duration(row)
+
+                    # Render the certificate body with dynamic context
+                    template = Template(custom_content)
+                    rendered_body = template.render(**template_context)
+
+                    context = {
+                        "student_name": safe_value(row.get("student_name")),
+                        "certificate_body": rendered_body,
+                        "certificate_number": cert_no,
+                        "place": safe_value(row.get("place")),
+                        "issue_date": issue_date,
+                        "base_url": f"file:///{BASE_DIR.replace(os.sep, '/')}"
+                    }
+
+                    # Get selected template (default to certificate.html)
+                    selected_template = request.form.get("template", "certificate.html")
+                    html = render_template(selected_template, **context)
+
+                    os.makedirs(PDF_DIR, exist_ok=True)
+                    pdf_path = os.path.join(PDF_DIR, f"{cert_no}.pdf")
+
+                    HTML(string=html, base_url=BASE_DIR).write_pdf(pdf_path)
+                    pdf_files.append(pdf_path)
+
+                    # Upload to Cloudinary
+                    cloudinary_url = upload_to_cloudinary(pdf_path, cert_no)
+
+                    # Save DB record
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    c.execute(
+                        "INSERT INTO certificates (certificate_number, student_name, pdf_path, cloudinary_url) VALUES (?, ?, ?, ?)",
+                        (cert_no, context["student_name"], pdf_path, cloudinary_url)
+                    )
+                    conn.commit()
+                    conn.close()
+
+                # ZIP download
+                zip_path = os.path.join(PDF_DIR, "certificates.zip")
+                if os.path.exists(zip_path):
+                    os.remove(zip_path)
+
+                with zipfile.ZipFile(zip_path, "w") as zipf:
+                    for pdf in pdf_files:
+                        zipf.write(pdf, os.path.basename(pdf))
+
+                return send_file(zip_path, as_attachment=True, download_name="certificates.zip")
+            except Exception as e:
+                logger.error(f"Bulk generation error: {e}", exc_info=True)
+                return jsonify({"error": f"An error occurred during bulk generation: {str(e)}"}), 500
+
+        # ===================== SINGLE MODE =====================
+        elif single_name and custom_content:
+            try:
+                raw_date = request.form.get("single_date", "")
+                single_place = request.form.get("single_place", "")
+
+                single_date = ""
+                if raw_date:
+                    single_date = datetime.strptime(raw_date, "%Y-%m-%d").strftime("%d-%m-%Y")
 
                 cert_no = get_next_certificate_number()
 
-                issue_date = ""
-                if "issue_date" in row and not pd.isna(row["issue_date"]):
-                    issue_date = row["issue_date"].strftime("%d-%m-%Y")
-
-                # Build dynamic context from ALL Excel columns
-                template_context = {}
-                for col in df.columns:
-                    value = row.get(col)
-                    
-                    # Special formatting for certain columns
-                    if col == "semester":
-                        template_context[col] = format_semester(value)
-                    elif col == "internship_duration":
-                        template_context[col] = format_internship_duration(row)
-                    elif col in ["start_date", "end_date"] and not pd.isna(value):
-                        template_context[col] = pd.to_datetime(value).strftime("%d-%m-%Y")
-                    elif col == "issue_date":
-                        template_context[col] = issue_date
-                    else:
-                        template_context[col] = safe_value(value)
-                
-                # Add computed field for internship_duration if not in Excel
-                if "internship_duration" not in template_context:
-                    template_context["internship_duration"] = format_internship_duration(row)
-
-                # Render the certificate body with dynamic context
                 template = Template(custom_content)
-                rendered_body = template.render(**template_context)
+                rendered_body = template.render()
 
                 context = {
-                    "student_name": safe_value(row.get("student_name")),
+                    "student_name": safe_value(single_name),
                     "certificate_body": rendered_body,
                     "certificate_number": cert_no,
-                    "place": safe_value(row.get("place")),
-                    "issue_date": issue_date,
+                    "single_place": safe_value(single_place),
+                    "single_issue_date": single_date,
                     "base_url": f"file:///{BASE_DIR.replace(os.sep, '/')}"
                 }
 
@@ -309,11 +371,10 @@ def upload():
                 pdf_path = os.path.join(PDF_DIR, f"{cert_no}.pdf")
 
                 HTML(string=html, base_url=BASE_DIR).write_pdf(pdf_path)
-                pdf_files.append(pdf_path)
-
+                
                 # Upload to Cloudinary
                 cloudinary_url = upload_to_cloudinary(pdf_path, cert_no)
-
+                
                 # Save DB record
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
@@ -324,71 +385,10 @@ def upload():
                 conn.commit()
                 conn.close()
 
-            zip_path = os.path.join(PDF_DIR, "certificates.zip")
-            if os.path.exists(zip_path):
-                os.remove(zip_path)
-
-            with zipfile.ZipFile(zip_path, "w") as zipf:
-                for pdf in pdf_files:
-                    zipf.write(pdf, os.path.basename(pdf))
-
-            return send_file(zip_path, as_attachment=True, download_name="certificates.zip")
-
-        except Exception as e:
-            logger.error(f"Bulk generation error: {e}", exc_info=True)
-            return jsonify({"error": f"An error occurred during bulk generation: {str(e)}"}), 500
-
-        # ===================== SINGLE MODE =====================
-        elif single_name and custom_content:
-
-            raw_date = request.form.get("single_date", "")
-            single_place = request.form.get("single_place", "")
-
-            single_date = ""
-            if raw_date:
-                single_date = datetime.strptime(raw_date, "%Y-%m-%d").strftime("%d-%m-%Y")
-
-            cert_no = get_next_certificate_number()
-
-            template = Template(custom_content)
-            rendered_body = template.render()
-
-            context = {
-                "student_name": safe_value(single_name),
-                "certificate_body": rendered_body,
-                "certificate_number": cert_no,
-                "single_place": safe_value(single_place),
-                "single_issue_date": single_date,
-                "base_url": f"file:///{BASE_DIR.replace(os.sep, '/')}"
-            }
-
-            # Get selected template (default to certificate.html)
-            selected_template = request.form.get("template", "certificate.html")
-            html = render_template(selected_template, **context)
-
-            os.makedirs(PDF_DIR, exist_ok=True)
-            pdf_path = os.path.join(PDF_DIR, f"{cert_no}.pdf")
-
-            HTML(string=html, base_url=BASE_DIR).write_pdf(pdf_path)
-            
-            # Upload to Cloudinary
-            cloudinary_url = upload_to_cloudinary(pdf_path, cert_no)
-            
-            # Save DB record
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute(
-                "INSERT INTO certificates (certificate_number, student_name, pdf_path, cloudinary_url) VALUES (?, ?, ?, ?)",
-                (cert_no, context["student_name"], pdf_path, cloudinary_url)
-            )
-            conn.commit()
-            conn.close()
-
-            return send_file(pdf_path, as_attachment=True)
-
-        except Exception as e:
-            logger.error(f"Single generation error: {e}", exc_info=True)
-            return jsonify({"error": f"An error occurred during certificate generation: {str(e)}"}), 500
+                return send_file(pdf_path, as_attachment=True)
+            except Exception as e:
+                logger.error(f"Single generation error: {e}", exc_info=True)
+                return jsonify({"error": f"An error occurred during certificate generation: {str(e)}"}), 500
 
         return "Error: Upload Excel or enter Student Name"
 

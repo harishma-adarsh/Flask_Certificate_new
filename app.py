@@ -28,6 +28,9 @@ cloudinary_api_secret = os.getenv("CLOUDINARY_API_SECRET")
 if not all([cloudinary_cloud_name, cloudinary_api_key, cloudinary_api_secret]):
     logger.warning("Cloudinary environment variables are missing!")
 
+if cloudinary_cloud_name == "Certificate":
+    logger.error("CRITICAL: Your Cloudinary 'cloud_name' is still set to 'Certificate'. Please update your Render environment variables with your actual Cloudinary Cloud Name.")
+
 cloudinary.config(
     cloud_name=cloudinary_cloud_name,
     api_key=cloudinary_api_key,

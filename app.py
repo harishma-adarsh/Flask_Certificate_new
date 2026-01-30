@@ -263,7 +263,7 @@ def upload():
                 )
 
                 # Parse date columns safely
-                for col in ["issue_date", "start_date", "end_date"]:
+                for col in ["issue_date", "date", "start_date", "end_date"]:
                     if col in df.columns:
                         df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
 
@@ -273,9 +273,12 @@ def upload():
 
                     cert_no = get_next_certificate_number()
 
-                    issue_date = ""
-                    if "issue_date" in row and not pd.isna(row["issue_date"]):
-                        issue_date = row["issue_date"].strftime("%d-%m-%Y")
+                    # Find issue date in various columns or use today
+                    issue_date_val = row.get("issue_date") or row.get("date")
+                    if not pd.isna(issue_date_val) and hasattr(issue_date_val, "strftime"):
+                        issue_date = issue_date_val.strftime("%d-%m-%Y")
+                    else:
+                        issue_date = datetime.now().strftime("%d-%m-%Y")
 
                     # Build dynamic context from ALL Excel columns
                     template_context = {}
@@ -302,9 +305,20 @@ def upload():
                     template = Template(custom_content)
                     rendered_body = template.render(**template_context)
 
+                    # Determine Certificate Title
+                    content_lower = rendered_body.lower()
+                    if "industrial visit" in content_lower:
+                        cert_title = "INDUSTRIAL VISIT"
+                    else:
+                        cert_title = "INTERNSHIP"
+
+                    # Find student name from common column variants
+                    student_name_val = row.get("student_name") or row.get("full_name") or row.get("name")
+
                     context = {
-                        "student_name": safe_value(row.get("student_name")),
+                        "student_name": safe_value(student_name_val),
                         "certificate_body": rendered_body,
+                        "certificate_title": cert_title,
                         "certificate_number": cert_no,
                         "place": safe_value(row.get("place")),
                         "issue_date": issue_date,
@@ -363,9 +377,17 @@ def upload():
                 template = Template(custom_content)
                 rendered_body = template.render()
 
+                # Determine Certificate Title
+                content_lower = rendered_body.lower()
+                if "industrial visit" in content_lower:
+                    cert_title = "INDUSTRIAL VISIT"
+                else:
+                    cert_title = "INTERNSHIP"
+
                 context = {
                     "student_name": safe_value(single_name),
                     "certificate_body": rendered_body,
+                    "certificate_title": cert_title,
                     "certificate_number": cert_no,
                     "single_place": safe_value(single_place),
                     "single_issue_date": single_date,

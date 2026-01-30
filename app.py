@@ -42,6 +42,7 @@ PDF_DIR = os.path.join(BASE_DIR, "generated", "pdfs")
 
 # ---------------- DATABASE INIT ----------------
 def init_db():
+    logger.info("Initializing database...")
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
@@ -58,10 +59,15 @@ def init_db():
     c.execute("PRAGMA table_info(certificates)")
     columns = [info[1] for info in c.fetchall()]
     if "cloudinary_url" not in columns:
+        logger.info("Adding cloudinary_url column to certificates table...")
         c.execute("ALTER TABLE certificates ADD COLUMN cloudinary_url TEXT")
         
     conn.commit()
     conn.close()
+    logger.info("Database initialization complete.")
+
+# Initialize the DB immediately on startup
+init_db()
 
 
 # ---------------- SAFE VALUE (NaN FIX) ----------------
@@ -397,6 +403,5 @@ def upload():
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
-    init_db()
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)

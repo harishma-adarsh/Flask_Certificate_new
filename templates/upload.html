@@ -335,7 +335,7 @@ Place: {{ place }}</textarea>
 
     <script>
         // Show preview button when file is selected
-        document.getElemelFile').addEventListener('change', function () {
+        document.getElementById('excelFile').addEventListener('change', function () {
             const previewBtn = document.getElementById('previewBtn');
             if (this.files.length > 0) {
                 previewBtn.style.display = 'block';
@@ -457,10 +457,10 @@ Place: {{ place }}</textarea>
         function showToast(message, type = 'success') {
             const tempMsg = document.createElement('div');
             tempMsg.textContent = message;
-            const bg = type === 'success' 
-                ? 'linear-gradient(135deg, #66bb6a 0%, #43a047 100%)' 
+            const bg = type === 'success'
+                ? 'linear-gradient(135deg, #66bb6a 0%, #43a047 100%)'
                 : 'linear-gradient(135deg, #ef5350 0%, #d32f2f 100%)';
-            
+
             tempMsg.style.cssText = `position: fixed; top: 20px; right: 20px; background: ${bg}; color: white; padding: 15px 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); z-index: 9999; font-weight: 600;`;
             document.body.appendChild(tempMsg);
 
@@ -470,7 +470,7 @@ Place: {{ place }}</textarea>
         }
 
         // Clear Database Logic
-        document.getElementById('clearDbBtn').addEventListener('click', async function() {
+        document.getElementById('clearDbBtn').addEventListener('click', async function () {
             if (!confirm('⚠️ Are you sure you want to clear the entire database history? This will reset the certificate numbering back to 001 and delete all history. This cannot be undone!')) {
                 return;
             }
@@ -478,7 +478,7 @@ Place: {{ place }}</textarea>
             try {
                 const response = await fetch('/clear_db', { method: 'POST' });
                 const data = await response.json();
-                
+
                 if (data.success) {
                     showToast('✅ ' + data.message, 'success');
                     setTimeout(() => location.reload(), 1500);

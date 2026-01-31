@@ -10,6 +10,8 @@ from jinja2 import Template
 import cloudinary
 import cloudinary.uploader
 import logging
+import gc
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -268,19 +270,15 @@ def upload():
                         df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
 
                 pdf_files = []
-                
-                # Use a single DB connection for the entire batch
+                upload_tasks = []
+                generation_info = []
+
+                # Use a single connection for the whole batch
                 conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-
-                total_rows = len(df)
-                logger.info(f"Starting bulk generation for {total_rows} rows...")
-
-                for idx, row in df.iterrows():
-                    try:
+                
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    for _, row in df.iterrows():
                         cert_no = get_next_certificate_number()
-                        
-                        logger.info(f"Processing {idx+1}/{total_rows}: {cert_no}")
 
                         # Find issue date in various columns or use today
                         issue_date_val = row.get("issue_date") or row.get("date")
@@ -289,7 +287,7 @@ def upload():
                         else:
                             issue_date = datetime.now().strftime("%d-%m-%Y")
 
-                        # Build dynamic context
+                        # Build dynamic context from ALL Excel columns
                         template_context = {}
                         for col in df.columns:
                             value = row.get(col)
@@ -312,7 +310,6 @@ def upload():
 
                         content_lower = rendered_body.lower()
                         cert_title = "INDUSTRIAL VISIT" if "industrial visit" in content_lower else "INTERNSHIP"
-
                         student_name_val = row.get("student_name") or row.get("full_name") or row.get("name")
 
                         context = {
@@ -331,24 +328,37 @@ def upload():
                         os.makedirs(PDF_DIR, exist_ok=True)
                         pdf_path = os.path.join(PDF_DIR, f"{cert_no}.pdf")
 
+                        # Generate PDF
                         HTML(string=html, base_url=BASE_DIR).write_pdf(pdf_path)
                         pdf_files.append(pdf_path)
+                        
+                        # Queue Cloudinary upload (Parallel)
+                        upload_tasks.append(executor.submit(upload_to_cloudinary, pdf_path, cert_no))
+                        
+                        # Store info for DB insertion later
+                        generation_info.append({
+                            "cert_no": cert_no,
+                            "name": context["student_name"],
+                            "path": pdf_path
+                        })
+                        
+                        # Clean up memory
+                        del html
+                        gc.collect()
 
-                        # Upload to Cloudinary
-                        cloudinary_url = upload_to_cloudinary(pdf_path, cert_no)
-
-                        # Save DB record using existing connection
+                    # Wait for all uploads and update DB
+                    for i, future in enumerate(upload_tasks):
+                        cloudinary_url = future.result()
+                        info = generation_info[i]
+                        
+                        c = conn.cursor()
                         c.execute(
                             "INSERT INTO certificates (certificate_number, student_name, pdf_path, cloudinary_url) VALUES (?, ?, ?, ?)",
-                            (cert_no, context["student_name"], pdf_path, cloudinary_url)
+                            (info["cert_no"], info["name"], info["path"], cloudinary_url)
                         )
-                        conn.commit()
-                    except Exception as inner_e:
-                        logger.error(f"Error processing row {idx+1}: {inner_e}", exc_info=True)
-                        continue
-
+                
+                conn.commit()
                 conn.close()
-                logger.info("Bulk generation loop complete.")
 
                 # ZIP download
                 zip_path = os.path.join(PDF_DIR, "certificates.zip")

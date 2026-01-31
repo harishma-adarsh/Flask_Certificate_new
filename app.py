@@ -268,85 +268,87 @@ def upload():
                         df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
 
                 pdf_files = []
+                
+                # Use a single DB connection for the entire batch
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
 
-                for _, row in df.iterrows():
+                total_rows = len(df)
+                logger.info(f"Starting bulk generation for {total_rows} rows...")
 
-                    cert_no = get_next_certificate_number()
-
-                    # Find issue date in various columns or use today
-                    issue_date_val = row.get("issue_date") or row.get("date")
-                    if not pd.isna(issue_date_val) and hasattr(issue_date_val, "strftime"):
-                        issue_date = issue_date_val.strftime("%d-%m-%Y")
-                    else:
-                        issue_date = datetime.now().strftime("%d-%m-%Y")
-
-                    # Build dynamic context from ALL Excel columns
-                    template_context = {}
-                    for col in df.columns:
-                        value = row.get(col)
+                for idx, row in df.iterrows():
+                    try:
+                        cert_no = get_next_certificate_number()
                         
-                        # Special formatting for certain columns
-                        if col == "semester":
-                            template_context[col] = format_semester(value)
-                        elif col == "internship_duration":
-                            template_context[col] = format_internship_duration(row)
-                        elif col in ["start_date", "end_date"] and not pd.isna(value):
-                            template_context[col] = pd.to_datetime(value).strftime("%d-%m-%Y")
-                        elif col == "issue_date":
-                            template_context[col] = issue_date
+                        logger.info(f"Processing {idx+1}/{total_rows}: {cert_no}")
+
+                        # Find issue date in various columns or use today
+                        issue_date_val = row.get("issue_date") or row.get("date")
+                        if not pd.isna(issue_date_val) and hasattr(issue_date_val, "strftime"):
+                            issue_date = issue_date_val.strftime("%d-%m-%Y")
                         else:
-                            template_context[col] = safe_value(value)
-                    
-                    # Add computed field for internship_duration if not in Excel
-                    if "internship_duration" not in template_context:
-                        template_context["internship_duration"] = format_internship_duration(row)
+                            issue_date = datetime.now().strftime("%d-%m-%Y")
 
-                    # Render the certificate body with dynamic context
-                    template = Template(custom_content)
-                    rendered_body = template.render(**template_context)
+                        # Build dynamic context
+                        template_context = {}
+                        for col in df.columns:
+                            value = row.get(col)
+                            if col == "semester":
+                                template_context[col] = format_semester(value)
+                            elif col == "internship_duration":
+                                template_context[col] = format_internship_duration(row)
+                            elif col in ["start_date", "end_date"] and not pd.isna(value):
+                                template_context[col] = pd.to_datetime(value).strftime("%d-%m-%Y")
+                            elif col == "issue_date":
+                                template_context[col] = issue_date
+                            else:
+                                template_context[col] = safe_value(value)
+                        
+                        if "internship_duration" not in template_context:
+                            template_context["internship_duration"] = format_internship_duration(row)
 
-                    # Determine Certificate Title
-                    content_lower = rendered_body.lower()
-                    if "industrial visit" in content_lower:
-                        cert_title = "INDUSTRIAL VISIT"
-                    else:
-                        cert_title = "INTERNSHIP"
+                        template = Template(custom_content)
+                        rendered_body = template.render(**template_context)
 
-                    # Find student name from common column variants
-                    student_name_val = row.get("student_name") or row.get("full_name") or row.get("name")
+                        content_lower = rendered_body.lower()
+                        cert_title = "INDUSTRIAL VISIT" if "industrial visit" in content_lower else "INTERNSHIP"
 
-                    context = {
-                        "student_name": safe_value(student_name_val),
-                        "certificate_body": rendered_body,
-                        "certificate_title": cert_title,
-                        "certificate_number": cert_no,
-                        "place": safe_value(row.get("place")),
-                        "issue_date": issue_date,
-                        "base_url": f"file:///{BASE_DIR.replace(os.sep, '/')}"
-                    }
+                        student_name_val = row.get("student_name") or row.get("full_name") or row.get("name")
 
-                    # Get selected template (default to certificate.html)
-                    selected_template = request.form.get("template", "certificate.html")
-                    html = render_template(selected_template, **context)
+                        context = {
+                            "student_name": safe_value(student_name_val),
+                            "certificate_body": rendered_body,
+                            "certificate_title": cert_title,
+                            "certificate_number": cert_no,
+                            "place": safe_value(row.get("place")),
+                            "issue_date": issue_date,
+                            "base_url": f"file:///{BASE_DIR.replace(os.sep, '/')}"
+                        }
 
-                    os.makedirs(PDF_DIR, exist_ok=True)
-                    pdf_path = os.path.join(PDF_DIR, f"{cert_no}.pdf")
+                        selected_template = request.form.get("template", "certificate.html")
+                        html = render_template(selected_template, **context)
 
-                    HTML(string=html, base_url=BASE_DIR).write_pdf(pdf_path)
-                    pdf_files.append(pdf_path)
+                        os.makedirs(PDF_DIR, exist_ok=True)
+                        pdf_path = os.path.join(PDF_DIR, f"{cert_no}.pdf")
 
-                    # Upload to Cloudinary
-                    cloudinary_url = upload_to_cloudinary(pdf_path, cert_no)
+                        HTML(string=html, base_url=BASE_DIR).write_pdf(pdf_path)
+                        pdf_files.append(pdf_path)
 
-                    # Save DB record
-                    conn = sqlite3.connect(DB_PATH)
-                    c = conn.cursor()
-                    c.execute(
-                        "INSERT INTO certificates (certificate_number, student_name, pdf_path, cloudinary_url) VALUES (?, ?, ?, ?)",
-                        (cert_no, context["student_name"], pdf_path, cloudinary_url)
-                    )
-                    conn.commit()
-                    conn.close()
+                        # Upload to Cloudinary
+                        cloudinary_url = upload_to_cloudinary(pdf_path, cert_no)
+
+                        # Save DB record using existing connection
+                        c.execute(
+                            "INSERT INTO certificates (certificate_number, student_name, pdf_path, cloudinary_url) VALUES (?, ?, ?, ?)",
+                            (cert_no, context["student_name"], pdf_path, cloudinary_url)
+                        )
+                        conn.commit()
+                    except Exception as inner_e:
+                        logger.error(f"Error processing row {idx+1}: {inner_e}", exc_info=True)
+                        continue
+
+                conn.close()
+                logger.info("Bulk generation loop complete.")
 
                 # ZIP download
                 zip_path = os.path.join(PDF_DIR, "certificates.zip")

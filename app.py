@@ -88,10 +88,9 @@ def safe_value(value):
 
 
 # ---------------- CERTIFICATE NUMBER ----------------
-def get_next_certificate_number():
-    START_NUMBER = 1   # 001
-    PAD_LENGTH = 3     # 3 digits
-
+def get_last_certificate_number_int():
+    """Returns the integer part of the last certificate number"""
+    START_NUMBER = 1
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT certificate_number FROM certificates ORDER BY id DESC LIMIT 1")
@@ -99,13 +98,18 @@ def get_next_certificate_number():
     conn.close()
 
     if not row:
-        return f"ACDT-C-25-{START_NUMBER:0{PAD_LENGTH}d}"
+        return START_NUMBER - 1
 
     match = re.search(r"(\d+)$", row[0])
-    last_no = int(match.group(1)) if match else START_NUMBER - 1
-    next_no = last_no + 1
+    return int(match.group(1)) if match else START_NUMBER - 1
 
-    return f"ACDT-C-25-{next_no:0{PAD_LENGTH}d}"
+def format_certificate_number(number):
+    PAD_LENGTH = 3
+    return f"ACDT-C-25-{number:0{PAD_LENGTH}d}"
+
+def get_next_certificate_number():
+    last_no = get_last_certificate_number_int()
+    return format_certificate_number(last_no + 1)
 
 
 # ---------------- SEMESTER FORMAT ----------------
@@ -114,6 +118,8 @@ def format_semester(semester):
         return ""
 
     semester = str(semester).strip()
+    if not semester:
+        return ""
 
     match = re.match(r"^(\d+)(st|nd|rd|th)$", semester, re.IGNORECASE)
     if match:
@@ -121,13 +127,20 @@ def format_semester(semester):
 
     if semester.isdigit():
         sem = int(semester)
-        if 11 <= sem % 100 <= 13:
-            suffix = "th"
-        else:
-            suffix = {1: "st", 2: "nd", 3: "rd"}.get(sem % 10, "th")
-        return f"{sem}<sup>{suffix}</sup>"
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(sem % 10, "th")
+        return f"{sem}{suffix}"
 
     return semester
+
+def get_font_size(name):
+    """Calculate dynamic font size based on name length.
+    More aggressive scaling to ensure names fit on one line.
+    """
+    length = len(str(name))
+    if length > 25: return "28px"
+    if length > 20: return "34px"
+    if length > 15: return "40px"
+    return "52px"
 
 
 # ---------------- INTERNSHIP DURATION ----------------
@@ -136,8 +149,9 @@ def format_internship_duration(row):
     if not pd.isna(hours) and str(hours).strip():
         return f"{int(hours)} Hours"
 
-    start = row.get("start_date")
-    end = row.get("end_date")
+    # Support various date column names
+    start = row.get("start_date") or row.get("joining_date") or row.get("start")
+    end = row.get("end_date") or row.get("ending_date") or row.get("end")
 
     if not pd.isna(start) and not pd.isna(end):
         try:
@@ -244,6 +258,7 @@ def upload():
         excel_file = request.files.get("excel")
         custom_content = request.form.get("content", "").strip()
         single_name = request.form.get("student_name", "").strip()
+        cert_type_preference = request.form.get("cert_type", "auto")
 
         # ===================== BULK MODE =====================
         if excel_file and excel_file.filename:
@@ -255,17 +270,33 @@ def upload():
                 excel_file.seek(0)
 
                 df = pd.read_excel(excel_file, header=header_row_idx)
+                
+                # Cleanup: remove completely empty rows and convert all headers to string
+                df = df.dropna(how='all')
+                df.columns = [str(c).strip() for c in df.columns]
 
                 # Normalize column names
                 df.columns = (
-                    df.columns.astype(str)
-                    .str.strip()
+                    pd.Series(df.columns)
                     .str.lower()
                     .str.replace(r"\s+", "_", regex=True)
                 )
+                
+                # Further cleanup: remove rows where the student name is missing
+                name_cols = ["student_name", "full_name", "name", "full_name_with_initial", "studentname"]
+                actual_name_col = next((c for c in name_cols if c in df.columns), None)
+                if actual_name_col:
+                    df = df[df[actual_name_col].astype(str).str.strip().ne("nan") & df[actual_name_col].astype(str).str.strip().ne("")]
+                
+                df = df.reset_index(drop=True)
+                
+                logger.info(f"Bulk generation started. Rows detected after cleanup: {len(df)}")
+                if len(df) == 0:
+                    return "Error: No valid data rows found in Excel file. Please check column headings."
 
-                # Parse date columns safely
-                for col in ["issue_date", "date", "start_date", "end_date"]:
+                # Parse date columns safely (including user-defined ones)
+                date_cols = ["issue_date", "date", "start_date", "end_date", "joining_date", "ending_date"]
+                for col in date_cols:
                     if col in df.columns:
                         df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
 
@@ -276,9 +307,13 @@ def upload():
                 # Use a single connection for the whole batch
                 conn = sqlite3.connect(DB_PATH)
                 
+                # Get starting number for this batch
+                current_last_no = get_last_certificate_number_int()
+                
                 with ThreadPoolExecutor(max_workers=5) as executor:
-                    for _, row in df.iterrows():
-                        cert_no = get_next_certificate_number()
+                    for i, (_, row) in enumerate(df.iterrows()):
+                        # Incremented number for each row
+                        cert_no = format_certificate_number(current_last_no + i + 1)
 
                         # Find issue date in various columns or use today
                         issue_date_val = row.get("issue_date") or row.get("date")
@@ -295,12 +330,28 @@ def upload():
                                 template_context[col] = format_semester(value)
                             elif col == "internship_duration":
                                 template_context[col] = format_internship_duration(row)
-                            elif col in ["start_date", "end_date"] and not pd.isna(value):
+                            elif col in ["start_date", "end_date", "joining_date", "ending_date"] and not pd.isna(value):
                                 template_context[col] = pd.to_datetime(value).strftime("%d-%m-%Y")
                             elif col == "issue_date":
                                 template_context[col] = issue_date
                             else:
                                 template_context[col] = safe_value(value)
+                        
+                        # Smart Mappings for user template (Support truncated names too)
+                        if "course_name" not in template_context and "subject" in template_context:
+                            template_context["course_name"] = template_context["subject"]
+                        if "internship_program" not in template_context:
+                            template_context["internship_program"] = template_context.get("subject") or template_context.get("department", "")
+                        
+                        # Handle "Register Numbe" or "Register Number" or "Reg ID"
+                        reg_val = None
+                        for key in template_context.keys():
+                            if "register" in key or "reg" in key:
+                                reg_val = template_context[key]
+                                break
+                        if reg_val:
+                            template_context["reg_id"] = reg_val
+                            template_context["register_number"] = reg_val
                         
                         if "internship_duration" not in template_context:
                             template_context["internship_duration"] = format_internship_duration(row)
@@ -308,12 +359,32 @@ def upload():
                         template = Template(custom_content)
                         rendered_body = template.render(**template_context)
 
-                        content_lower = rendered_body.lower()
-                        cert_title = "INDUSTRIAL VISIT" if "industrial visit" in content_lower else "INTERNSHIP"
-                        student_name_val = row.get("student_name") or row.get("full_name") or row.get("name")
+                        # Determine Title
+                        if cert_type_preference == "internship":
+                            cert_title = "INTERNSHIP"
+                        elif cert_type_preference == "industrial_visit":
+                            cert_title = "INDUSTRIAL VISIT"
+                        else:
+                            # Auto-detect logic
+                            subject_val = str(template_context.get("subject", "")).lower()
+                            program_val = str(template_context.get("internship_program", "")).lower()
+                            content_lower = rendered_body.lower()
+                            
+                            if "industrial visit" in subject_val or "industrial visit" in program_val or "industrial visit" in content_lower:
+                                cert_title = "INDUSTRIAL VISIT"
+                            else:
+                                cert_title = "INTERNSHIP"
+
+                        student_name_val = (
+                            row.get("student_name") or 
+                            row.get("full_name") or 
+                            row.get("name") or 
+                            row.get("full_name_with_initial")
+                        )
 
                         context = {
                             "student_name": safe_value(student_name_val),
+                            "student_name_style": f"font-size: {get_font_size(student_name_val)};",
                             "certificate_body": rendered_body,
                             "certificate_title": cert_title,
                             "certificate_number": cert_no,
@@ -390,14 +461,20 @@ def upload():
                 rendered_body = template.render()
 
                 # Determine Certificate Title
-                content_lower = rendered_body.lower()
-                if "industrial visit" in content_lower:
+                if cert_type_preference == "internship":
+                    cert_title = "INTERNSHIP"
+                elif cert_type_preference == "industrial_visit":
                     cert_title = "INDUSTRIAL VISIT"
                 else:
-                    cert_title = "INTERNSHIP"
+                    content_lower = rendered_body.lower()
+                    if "industrial visit" in content_lower:
+                        cert_title = "INDUSTRIAL VISIT"
+                    else:
+                        cert_title = "INTERNSHIP"
 
                 context = {
                     "student_name": safe_value(single_name),
+                    "student_name_style": f"font-size: {get_font_size(single_name)};",
                     "certificate_body": rendered_body,
                     "certificate_title": cert_title,
                     "certificate_number": cert_no,

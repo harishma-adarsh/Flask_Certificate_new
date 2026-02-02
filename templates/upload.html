@@ -123,35 +123,6 @@
             box-shadow: 0 6px 15px rgba(211, 47, 47, 0.3);
         }
 
-        .info-box {
-            font-size: 14px;
-            background: linear-gradient(135deg, #e1f5fe 0%, #f3e5f5 100%);
-            padding: 20px;
-            border-radius: 12px;
-            margin-top: 20px;
-            border-left: 5px solid #42a5f5;
-        }
-
-        .column-badge {
-            display: inline-block;
-            background: linear-gradient(135deg, #42a5f5 0%, #1976d2 100%);
-            color: white;
-            padding: 8px 16px;
-            margin: 5px;
-            border-radius: 25px;
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            box-shadow: 0 2px 8px rgba(25, 118, 210, 0.2);
-        }
-
-        .column-badge:hover {
-            background: linear-gradient(135deg, #1976d2 0%, #0d47a1 100%);
-            transform: scale(1.05);
-            box-shadow: 0 4px 12px rgba(25, 118, 210, 0.3);
-        }
-
         .excel-info {
             background: #e8f5e9;
             border: 2px solid #81c784;
@@ -227,10 +198,21 @@
             <div class="mb-4">
                 <label class="form-label">Select Template File</label>
                 <select name="template" class="form-select" style="font-size: 16px; padding: 12px;">
-                    <option value="certificate.html" selected>certificate.html (Standard - Maitexa)</option>
-                    <option value="certificate_new.html">certificate_new.html (New - Acadeno)</option>
+                    <option value="certificate.html">certificate.html (Standard - Maitexa)</option>
+                    <option value="Certificate_Acadeno.html" selected>Certificate_Acadeno.html (Modern Design)</option>
                 </select>
                 <div class="help-text">Choose which HTML template file to use for generation</div>
+            </div>
+
+            <div class="mb-4">
+                <label class="form-label">Certificate Type (Title)</label>
+                <select name="cert_type" class="form-select" style="font-size: 16px; padding: 12px;">
+                    <option value="auto" selected>Auto-detect (based on Content/Excel keywords)</option>
+                    <option value="internship">Force "INTERNSHIP"</option>
+                    <option value="industrial_visit">Force "INDUSTRIAL VISIT"</option>
+                </select>
+                <div class="help-text">Select the title to appear on the certificate (e.g. CERTIFICATE OF INTERNSHIP)
+                </div>
             </div>
 
             <hr>
@@ -306,30 +288,6 @@ Place: {{ place }}</textarea>
             <!-- Submit Button -->
             <button type="submit" class="submit-btn">🎓 Generate Certificate(s)</button>
 
-            <!-- Available Placeholders -->
-            <div class="info-box" id="placeholderBox">
-                <b>📌 Available Placeholders:</b><br>
-                <small>Click on any placeholder below to copy it to your clipboard</small><br><br>
-                <div id="placeholderList">
-                    <span class="column-badge" onclick="copyToClipboard('{{ student_name }}')">{{ student_name }}</span>
-                    <span class="column-badge" onclick="copyToClipboard('{{ college_name }}')">{{ college_name }}</span>
-                    <span class="column-badge" onclick="copyToClipboard('{{ college_location }}')">{{ college_location
-                        }}</span>
-                    <span class="column-badge" onclick="copyToClipboard('{{ semester }}')">{{ semester }}</span>
-                    <span class="column-badge" onclick="copyToClipboard('{{ course_name }}')">{{ course_name }}</span>
-                    <span class="column-badge" onclick="copyToClipboard('{{ reg_id }}')">{{ reg_id }}</span>
-                    <span class="column-badge" onclick="copyToClipboard('{{ internship_program }}')">{{
-                        internship_program }}</span>
-                    <span class="column-badge" onclick="copyToClipboard('{{ internship_duration }}')">{{
-                        internship_duration }}</span>
-                    <span class="column-badge" onclick="copyToClipboard('{{ internship_hours }}')">{{ internship_hours
-                        }}</span>
-                    <span class="column-badge" onclick="copyToClipboard('{{ start_date }}')">{{ start_date }}</span>
-                    <span class="column-badge" onclick="copyToClipboard('{{ end_date }}')">{{ end_date }}</span>
-                    <span class="column-badge" onclick="copyToClipboard('{{ place }}')">{{ place }}</span>
-                    <span class="column-badge" onclick="copyToClipboard('{{ issue_date }}')">{{ issue_date }}</span>
-                </div>
-            </div>
         </form>
     </div>
 
@@ -380,29 +338,10 @@ Place: {{ place }}</textarea>
                     // Display Excel info
                     let infoHTML = '<strong>✅ Excel file loaded successfully!</strong><br>';
                     infoHTML += '📊 Total rows: <strong>' + data.row_count + '</strong><br><br>';
-                    infoHTML += '<strong>Detected Columns:</strong><br><br>';
-
-                    // Create table structure
-                    infoHTML += '<div class="table-responsive" style="max-height: 300px; overflow-y: auto;">';
-                    infoHTML += '<table class="table table-bordered table-hover table-sm">';
-                    infoHTML += '<thead class="table-light" style="position: sticky; top: 0; z-index: 1;"><tr><th>Excel Heading</th><th>Placeholder code</th></tr></thead>';
-                    infoHTML += '<tbody>';
-
-                    data.columns.forEach(col => {
-                        infoHTML += '<tr>';
-                        infoHTML += '<td>' + col.original + '</td>';
-                        infoHTML += '<td><code>&#123;&#123; ' + col.normalized + ' &#125;&#125;</code></td>';
-                        infoHTML += '</tr>';
-                    });
-
-                    infoHTML += '</tbody></table></div>';
-                    infoHTML += '<small class="text-muted">Tip: Copy the placeholder code into your certificate template.</small>';
 
                     excelInfo.innerHTML = infoHTML;
                     excelInfo.classList.add('show');
 
-                    // Update placeholder list
-                    updatePlaceholderList(data.columns);
                 } else {
                     alert('Error: ' + data.error);
                 }
@@ -411,48 +350,6 @@ Place: {{ place }}</textarea>
                 alert('Error analyzing Excel file: ' + error.message);
             }
         });
-
-        // Update placeholder list based on Excel columns
-        function updatePlaceholderList(columns) {
-            const placeholderList = document.getElementById('placeholderList');
-            placeholderList.innerHTML = '';
-
-            columns.forEach(col => {
-                const badge = document.createElement('span');
-                badge.className = 'column-badge';
-                badge.textContent = '{{ ' + col.normalized + ' }}';
-                badge.onclick = function () {
-                    copyToClipboard('{{ ' + col.normalized + ' }}');
-                };
-                placeholderList.appendChild(badge);
-            });
-
-            // Add computed fields
-            const computedFields = ['{{ internship_duration }}'];
-            computedFields.forEach(field => {
-                if (!columns.find(c => '{{ ' + c.normalized + ' }}' === field)) {
-                    const badge = document.createElement('span');
-                    badge.className = 'column-badge';
-                    badge.textContent = field;
-                    badge.onclick = function () {
-                        copyToClipboard(field);
-                    };
-                    badge.style.background = 'linear-gradient(135deg, #ff9800 0%, #f57c00 100%)';
-                    badge.title = 'Computed field';
-                    placeholderList.appendChild(badge);
-                }
-            });
-        }
-
-        // Copy to clipboard function
-        function copyToClipboard(text) {
-            navigator.clipboard.writeText(text).then(function () {
-                // Show temporary success message
-                showToast('✓ Copied: ' + text, 'success');
-            }, function (err) {
-                alert('Failed to copy: ' + err);
-            });
-        }
 
         function showToast(message, type = 'success') {
             const tempMsg = document.createElement('div');

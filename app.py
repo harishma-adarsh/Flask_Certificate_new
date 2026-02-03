@@ -90,7 +90,7 @@ def safe_value(value):
 # ---------------- CERTIFICATE NUMBER ----------------
 def get_last_certificate_number_int():
     """Returns the integer part of the last certificate number"""
-    START_NUMBER = 217
+    START_NUMBER = 274
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT certificate_number FROM certificates ORDER BY id DESC LIMIT 1")
@@ -101,7 +101,10 @@ def get_last_certificate_number_int():
         return START_NUMBER - 1
 
     match = re.search(r"(\d+)$", row[0])
-    return int(match.group(1)) if match else START_NUMBER - 1
+    db_last_no = int(match.group(1)) if match else 0
+    
+    # Return whichever is higher: the sequence from DB or the START_NUMBER
+    return max(db_last_no, START_NUMBER - 1)
 
 def format_certificate_number(number):
     PAD_LENGTH = 3

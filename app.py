@@ -90,7 +90,7 @@ def safe_value(value):
 # ---------------- CERTIFICATE NUMBER ----------------
 def get_last_certificate_number_int():
     """Returns the integer part of the last certificate number"""
-    START_NUMBER = 398
+    START_NUMBER = 1
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT certificate_number FROM certificates ORDER BY id DESC LIMIT 1")
@@ -309,11 +309,22 @@ def upload():
 
                 # Use a single connection for the whole batch
                 conn = sqlite3.connect(DB_PATH)
-                
+
+                # Use a unique ID for this batch to avoid conflicts in a multi-user environment
+                batch_id = datetime.now().strftime("%Y%m%d%H%M%S")
+                batch_dir = os.path.join(PDF_DIR, batch_id)
+                os.makedirs(batch_dir, exist_ok=True)
+
                 # Get starting number for this batch
-                current_last_no = get_last_certificate_number_int()
-                
-                with ThreadPoolExecutor(max_workers=5) as executor:
+                start_no_input = request.form.get("start_number", "").strip()
+                if start_no_input and start_no_input.isdigit():
+                    current_last_no = int(start_no_input) - 1
+                else:
+                    current_last_no = get_last_certificate_number_int()
+
+                # Reduced workers to 2 to avoid memory crashes on Render 
+                # (WeasyPrint is memory intensive)
+                with ThreadPoolExecutor(max_workers=2) as executor:
                     for i, (_, row) in enumerate(df.iterrows()):
                         # Incremented number for each row
                         cert_no = format_certificate_number(current_last_no + i + 1)
@@ -399,8 +410,8 @@ def upload():
                         selected_template = request.form.get("template", "certificate.html")
                         html = render_template(selected_template, **context)
 
-                        os.makedirs(PDF_DIR, exist_ok=True)
-                        pdf_path = os.path.join(PDF_DIR, f"{cert_no}.pdf")
+                        os.makedirs(batch_dir, exist_ok=True)
+                        pdf_path = os.path.join(batch_dir, f"{cert_no}.pdf")
 
                         # Generate PDF
                         HTML(string=html, base_url=BASE_DIR).write_pdf(pdf_path)
@@ -434,14 +445,24 @@ def upload():
                 conn.commit()
                 conn.close()
 
-                # ZIP download
-                zip_path = os.path.join(PDF_DIR, "certificates.zip")
-                if os.path.exists(zip_path):
-                    os.remove(zip_path)
-
+                # ZIP download (Unique name for batch)
+                zip_name = f"certificates_{batch_id}.zip"
+                zip_path = os.path.join(PDF_DIR, zip_name)
+                
                 with zipfile.ZipFile(zip_path, "w") as zipf:
                     for pdf in pdf_files:
                         zipf.write(pdf, os.path.basename(pdf))
+
+                # Clean up individual PDFs after zipping (save disk space on Render)
+                for pdf in pdf_files:
+                    try:
+                        os.remove(pdf)
+                    except:
+                        pass
+                try:
+                    os.rmdir(batch_dir)
+                except:
+                    pass
 
                 return send_file(zip_path, as_attachment=True, download_name="certificates.zip")
             except Exception as e:
@@ -458,7 +479,12 @@ def upload():
                 if raw_date:
                     single_date = datetime.strptime(raw_date, "%Y-%m-%d").strftime("%d-%m-%Y")
 
-                cert_no = get_next_certificate_number()
+                # Get starting number
+                start_no_input = request.form.get("start_number", "").strip()
+                if start_no_input and start_no_input.isdigit():
+                    cert_no = format_certificate_number(int(start_no_input))
+                else:
+                    cert_no = get_next_certificate_number()
 
                 template = Template(custom_content)
                 rendered_body = template.render()
@@ -491,7 +517,9 @@ def upload():
                 html = render_template(selected_template, **context)
 
                 os.makedirs(PDF_DIR, exist_ok=True)
-                pdf_path = os.path.join(PDF_DIR, f"{cert_no}.pdf")
+                # Use a unique filename for the single PDF as well to avoid conflicts
+                single_id = datetime.now().strftime("%Y%m%d%H%M%S_%f")
+                pdf_path = os.path.join(PDF_DIR, f"{cert_no}_{single_id}.pdf")
 
                 HTML(string=html, base_url=BASE_DIR).write_pdf(pdf_path)
                 
